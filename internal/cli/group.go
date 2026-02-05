@@ -21,13 +21,16 @@ func newGroupCmd() *cobra.Command {
 }
 
 func newGroupEnableCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "enable <name>",
 		Short: "Enable a tunnel group",
-		Long:  "Start all tunnels in a group.",
+		Long:  "Start all tunnels in a group, connecting through the specified host.",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runGroupEnable,
 	}
+	cmd.Flags().String("host", "", "SSH host to connect through (required)")
+	cmd.MarkFlagRequired("host")
+	return cmd
 }
 
 func newGroupDisableCmd() *cobra.Command {
@@ -42,6 +45,7 @@ func newGroupDisableCmd() *cobra.Command {
 
 func runGroupEnable(cmd *cobra.Command, args []string) error {
 	groupName := args[0]
+	host, _ := cmd.Flags().GetString("host")
 
 	if !ipc.IsDaemonRunning() {
 		return fmt.Errorf("daemon is not running (start with 'bore start')")
@@ -52,11 +56,11 @@ func runGroupEnable(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := client.GroupEnable(groupName); err != nil {
+	if err := client.GroupEnable(groupName, host); err != nil {
 		return fmt.Errorf("failed to enable group '%s': %w", groupName, err)
 	}
 
-	fmt.Printf("Enabled group '%s'\n", groupName)
+	fmt.Printf("Enabled group '%s' via host '%s'\n", groupName, host)
 	return nil
 }
 

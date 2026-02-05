@@ -146,6 +146,22 @@ func manageTunnels(client *ipc.Client, options []huh.Option[string], running map
 		return nil
 	}
 
+	// Check if any tunnels need to be started (require host selection)
+	var tunnelsToStart []string
+	for _, name := range selectedTunnels {
+		if !running[name] {
+			tunnelsToStart = append(tunnelsToStart, name)
+		}
+	}
+
+	var host string
+	if len(tunnelsToStart) > 0 {
+		host, err = selectHost()
+		if err != nil {
+			return err
+		}
+	}
+
 	if !daemonRunning {
 		fmt.Println("Starting daemon first...")
 		if err := runStart(nil, nil); err != nil {
@@ -167,8 +183,8 @@ func manageTunnels(client *ipc.Client, options []huh.Option[string], running map
 				fmt.Println("done")
 			}
 		} else {
-			fmt.Printf("Starting tunnel '%s'... ", name)
-			if err := client.TunnelUp(name); err != nil {
+			fmt.Printf("Starting tunnel '%s' via host '%s'... ", name, host)
+			if err := client.TunnelUp(name, host); err != nil {
 				fmt.Printf("error: %v\n", err)
 			} else {
 				fmt.Println("done")
@@ -210,6 +226,15 @@ func manageGroups(client *ipc.Client, options []huh.Option[string], daemonRunnin
 		return err
 	}
 
+	// If enabling, ask for host
+	var host string
+	if action == "enable" {
+		host, err = selectHost()
+		if err != nil {
+			return err
+		}
+	}
+
 	if !daemonRunning {
 		fmt.Println("Starting daemon first...")
 		if err := runStart(nil, nil); err != nil {
@@ -223,8 +248,8 @@ func manageGroups(client *ipc.Client, options []huh.Option[string], daemonRunnin
 
 	switch action {
 	case "enable":
-		fmt.Printf("Enabling group '%s'... ", selectedGroup)
-		if err := client.GroupEnable(selectedGroup); err != nil {
+		fmt.Printf("Enabling group '%s' via host '%s'... ", selectedGroup, host)
+		if err := client.GroupEnable(selectedGroup, host); err != nil {
 			fmt.Printf("error: %v\n", err)
 		} else {
 			fmt.Println("done")
@@ -239,4 +264,55 @@ func manageGroups(client *ipc.Client, options []huh.Option[string], daemonRunnin
 	}
 
 	return nil
+}
+
+func selectHost() (string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Build host options from config
+	var hostOptions []huh.Option[string]
+	hostNames := make([]string, 0, len(cfg.Hosts))
+	for name := range cfg.Hosts {
+		hostNames = append(hostNames, name)
+	}
+	sort.Strings(hostNames)
+
+	for _, name := range hostNames {
+		h := cfg.Hosts[name]
+		label := name
+		if h.Hostname != "" {
+			label = fmt.Sprintf("%s (%s)", name, h.Hostname)
+		}
+		hostOptions = append(hostOptions, huh.NewOption(label, name))
+	}
+
+	// If no hosts configured, ask for manual input
+	if len(hostOptions) == 0 {
+		var host string
+		err := huh.NewInput().
+			Title("Enter SSH host").
+			Description("No hosts configured in config file").
+			Value(&host).
+			Run()
+		if err != nil {
+			return "", err
+		}
+		return host, nil
+	}
+
+	var selectedHost string
+	err = huh.NewSelect[string]().
+		Title("Select SSH host to connect through").
+		Options(hostOptions...).
+		Value(&selectedHost).
+		Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	return selectedHost, nil
 }

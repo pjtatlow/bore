@@ -23,7 +23,6 @@ const (
 	ReqTunnelDown   = "tunnel_down"
 	ReqGroupEnable  = "group_enable"
 	ReqGroupDisable = "group_disable"
-	ReqReloadConfig = "reload_config"
 	ReqPing         = "ping"
 )
 
@@ -70,9 +69,11 @@ type NetworkStatusInfo struct {
 // TunnelRequest is used for tunnel up/down requests
 type TunnelRequest struct {
 	Name string `json:"name"`
+	Host string `json:"host,omitempty"`
 }
 
 // GroupRequest is used for group enable/disable requests
 type GroupRequest struct {
 	Name string `json:"name"`
+	Host string `json:"host,omitempty"`
 }

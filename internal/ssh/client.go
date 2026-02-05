@@ -231,3 +231,39 @@ func (c *Client) IsConnected() bool {
 	defer c.mu.RUnlock()
 	return c.client != nil
 }
+
+// CheckHealth performs an immediate keepalive check with a timeout and returns any error.
+// If the check fails, the onDisconnect callback is called.
+func (c *Client) CheckHealth(timeout time.Duration) error {
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Run keepalive with timeout
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := client.SendRequest("keepalive@golang.com", true, nil)
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			if c.onDisconnect != nil {
+				c.onDisconnect(err)
+			}
+			return err
+		}
+		return nil
+	case <-time.After(timeout):
+		err := fmt.Errorf("health check timed out")
+		if c.onDisconnect != nil {
+			c.onDisconnect(err)
+		}
+		return err
+	}
+}

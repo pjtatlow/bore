@@ -21,13 +21,16 @@ func newTunnelCmd() *cobra.Command {
 }
 
 func newTunnelUpCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "up <name>",
 		Short: "Start a tunnel",
-		Long:  "Start an individual tunnel by name.",
+		Long:  "Start an individual tunnel by name, connecting through the specified host.",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runTunnelUp,
 	}
+	cmd.Flags().String("host", "", "SSH host to connect through (required)")
+	cmd.MarkFlagRequired("host")
+	return cmd
 }
 
 func newTunnelDownCmd() *cobra.Command {
@@ -42,6 +45,7 @@ func newTunnelDownCmd() *cobra.Command {
 
 func runTunnelUp(cmd *cobra.Command, args []string) error {
 	tunnelName := args[0]
+	host, _ := cmd.Flags().GetString("host")
 
 	if !ipc.IsDaemonRunning() {
 		return fmt.Errorf("daemon is not running (start with 'bore start')")
@@ -52,11 +56,11 @@ func runTunnelUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := client.TunnelUp(tunnelName); err != nil {
+	if err := client.TunnelUp(tunnelName, host); err != nil {
 		return fmt.Errorf("failed to start tunnel '%s': %w", tunnelName, err)
 	}
 
-	fmt.Printf("Started tunnel '%s'\n", tunnelName)
+	fmt.Printf("Started tunnel '%s' via host '%s'\n", tunnelName, host)
 	return nil
 }
 

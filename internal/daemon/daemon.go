@@ -19,7 +19,6 @@ import (
 
 // Daemon is the main daemon process
 type Daemon struct {
-	cfg            *config.Config
 	manager        *tunnel.Manager
 	server         *Server
 	state          *state.State
@@ -31,12 +30,7 @@ type Daemon struct {
 
 // New creates a new daemon instance
 func New() (*Daemon, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	manager, err := tunnel.NewManager(cfg)
+	manager, err := tunnel.NewManager()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tunnel manager: %w", err)
 	}
@@ -58,7 +52,6 @@ func New() (*Daemon, error) {
 	logger := log.New(logFile, "", log.LstdFlags)
 
 	d := &Daemon{
-		cfg:            cfg,
 		manager:        manager,
 		state:          st,
 		networkMonitor: reconnect.NewMonitor(),
@@ -145,20 +138,20 @@ func (d *Daemon) restoreState() error {
 	}
 
 	// Restore groups first (they may contain tunnels)
-	for _, groupName := range d.state.GetActiveGroups() {
-		if err := d.manager.StartGroup(d.ctx, groupName); err != nil {
-			d.logger.Printf("Failed to restore group '%s': %v", groupName, err)
+	for _, gs := range d.state.GetActiveGroups() {
+		if err := d.manager.StartGroup(d.ctx, gs.Name, gs.Host); err != nil {
+			d.logger.Printf("Failed to restore group '%s': %v", gs.Name, err)
 		} else {
-			d.logger.Printf("Restored group '%s'", groupName)
+			d.logger.Printf("Restored group '%s' via host '%s'", gs.Name, gs.Host)
 		}
 	}
 
 	// Restore individual tunnels
-	for _, tunnelName := range d.state.GetActiveTunnels() {
-		if err := d.manager.StartTunnel(d.ctx, tunnelName); err != nil {
-			d.logger.Printf("Failed to restore tunnel '%s': %v", tunnelName, err)
+	for _, ts := range d.state.GetActiveTunnels() {
+		if err := d.manager.StartTunnel(d.ctx, ts.Name, ts.Host); err != nil {
+			d.logger.Printf("Failed to restore tunnel '%s': %v", ts.Name, err)
 		} else {
-			d.logger.Printf("Restored tunnel '%s'", tunnelName)
+			d.logger.Printf("Restored tunnel '%s' via host '%s'", ts.Name, ts.Host)
 		}
 	}
 
@@ -191,10 +184,16 @@ func (d *Daemon) reconnectAllTunnels() {
 
 // reconnectTunnelWithBackoff attempts to reconnect a tunnel with exponential backoff
 func (d *Daemon) reconnectTunnelWithBackoff(name string) {
+	cfg, err := config.Load()
+	if err != nil {
+		d.logger.Printf("Failed to load config for reconnect: %v", err)
+		return
+	}
+
 	backoff := reconnect.NewBackoff(
-		d.cfg.Defaults.Reconnect.InitialBackoff,
-		d.cfg.Defaults.Reconnect.MaxBackoff,
-		d.cfg.Defaults.Reconnect.Multiplier,
+		cfg.Defaults.Reconnect.InitialBackoff,
+		cfg.Defaults.Reconnect.MaxBackoff,
+		cfg.Defaults.Reconnect.Multiplier,
 	)
 
 	go func() {
@@ -259,9 +258,6 @@ func (d *Daemon) HandleRequest(req ipc.Request) ipc.Response {
 	case ipc.ReqGroupDisable:
 		return d.handleGroupDisable(req.Data)
 
-	case ipc.ReqReloadConfig:
-		return d.handleReloadConfig()
-
 	default:
 		return ipc.Response{
 			Success: false,
@@ -271,6 +267,9 @@ func (d *Daemon) HandleRequest(req ipc.Request) ipc.Response {
 }
 
 func (d *Daemon) handleStatus() ipc.Response {
+	// Check health of all SSH connections before reporting status
+	d.manager.CheckHealth()
+
 	tunnelInfos := d.manager.GetAllTunnelInfo()
 	tunnelStatuses := make([]ipc.TunnelStatus, 0, len(tunnelInfos))
 
@@ -282,7 +281,7 @@ func (d *Daemon) handleStatus() ipc.Response {
 		tunnelStatuses = append(tunnelStatuses, ipc.TunnelStatus{
 			Name:           info.Name,
 			Type:           string(info.Config.Type),
-			Host:           info.Config.Host,
+			Host:           d.manager.GetTunnelHost(info.Name),
 			LocalPort:      info.Config.LocalPort,
 			RemoteHost:     info.Config.RemoteHost,
 			RemotePort:     info.Config.RemotePort,
@@ -302,8 +301,9 @@ func (d *Daemon) handleStatus() ipc.Response {
 		runningTunnels[name] = true
 	}
 
+	cfg, _ := config.Load()
 	groupStatuses := make([]ipc.GroupStatus, 0)
-	for name, group := range d.cfg.Groups {
+	for name, group := range cfg.Groups {
 		enabled := true
 		for _, tunnelName := range group.Tunnels {
 			if !runningTunnels[tunnelName] {
@@ -345,13 +345,17 @@ func (d *Daemon) handleTunnelUp(data interface{}) ipc.Response {
 		return ipc.Response{Success: false, Error: err.Error()}
 	}
 
-	if err := d.manager.StartTunnel(d.ctx, req.Name); err != nil {
+	if req.Host == "" {
+		return ipc.Response{Success: false, Error: "host is required"}
+	}
+
+	if err := d.manager.StartTunnel(d.ctx, req.Name, req.Host); err != nil {
 		return ipc.Response{Success: false, Error: err.Error()}
 	}
 
-	d.state.AddTunnel(req.Name)
+	d.state.AddTunnel(req.Name, req.Host)
 	d.state.Save()
-	d.logger.Printf("Started tunnel '%s'", req.Name)
+	d.logger.Printf("Started tunnel '%s' via host '%s'", req.Name, req.Host)
 
 	return ipc.Response{Success: true}
 }
@@ -379,13 +383,17 @@ func (d *Daemon) handleGroupEnable(data interface{}) ipc.Response {
 		return ipc.Response{Success: false, Error: err.Error()}
 	}
 
-	if err := d.manager.StartGroup(d.ctx, req.Name); err != nil {
+	if req.Host == "" {
+		return ipc.Response{Success: false, Error: "host is required"}
+	}
+
+	if err := d.manager.StartGroup(d.ctx, req.Name, req.Host); err != nil {
 		return ipc.Response{Success: false, Error: err.Error()}
 	}
 
-	d.state.AddGroup(req.Name)
+	d.state.AddGroup(req.Name, req.Host)
 	d.state.Save()
-	d.logger.Printf("Enabled group '%s'", req.Name)
+	d.logger.Printf("Enabled group '%s' via host '%s'", req.Name, req.Host)
 
 	return ipc.Response{Success: true}
 }
@@ -403,18 +411,6 @@ func (d *Daemon) handleGroupDisable(data interface{}) ipc.Response {
 	d.state.RemoveGroup(req.Name)
 	d.state.Save()
 	d.logger.Printf("Disabled group '%s'", req.Name)
-
-	return ipc.Response{Success: true}
-}
-
-func (d *Daemon) handleReloadConfig() ipc.Response {
-	cfg, err := config.Load()
-	if err != nil {
-		return ipc.Response{Success: false, Error: fmt.Sprintf("failed to reload config: %v", err)}
-	}
-
-	d.cfg = cfg
-	d.logger.Printf("Configuration reloaded")
 
 	return ipc.Response{Success: true}
 }

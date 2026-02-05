@@ -9,12 +9,24 @@ import (
 	"github.com/pjtatlow/bore/internal/ipc"
 )
 
+// TunnelState tracks an active tunnel and its host
+type TunnelState struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+}
+
+// GroupState tracks an active group and its host
+type GroupState struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+}
+
 // State represents the persisted daemon state
 type State struct {
 	mu            sync.RWMutex
-	StartTime     time.Time          `json:"start_time"`
-	ActiveTunnels []string           `json:"active_tunnels"`
-	ActiveGroups  []string           `json:"active_groups"`
+	StartTime     time.Time     `json:"start_time"`
+	ActiveTunnels []TunnelState `json:"active_tunnels"`
+	ActiveGroups  []GroupState  `json:"active_groups"`
 	path          string
 }
 
@@ -27,8 +39,8 @@ func NewState() (*State, error) {
 	return &State{
 		path:          path,
 		StartTime:     time.Now(),
-		ActiveTunnels: []string{},
-		ActiveGroups:  []string{},
+		ActiveTunnels: []TunnelState{},
+		ActiveGroups:  []GroupState{},
 	}, nil
 }
 
@@ -45,7 +57,13 @@ func (s *State) Load() error {
 		return err
 	}
 
-	return json.Unmarshal(data, s)
+	// Preserve StartTime - it should reflect when this daemon started, not the previous one
+	startTime := s.StartTime
+	if err := json.Unmarshal(data, s); err != nil {
+		return err
+	}
+	s.StartTime = startTime
+	return nil
 }
 
 // Save writes the state to disk
@@ -62,16 +80,18 @@ func (s *State) Save() error {
 }
 
 // AddTunnel adds a tunnel to the active list
-func (s *State) AddTunnel(name string) {
+func (s *State) AddTunnel(name, host string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, t := range s.ActiveTunnels {
-		if t == name {
+	for i, t := range s.ActiveTunnels {
+		if t.Name == name {
+			// Update host if tunnel already exists
+			s.ActiveTunnels[i].Host = host
 			return
 		}
 	}
-	s.ActiveTunnels = append(s.ActiveTunnels, name)
+	s.ActiveTunnels = append(s.ActiveTunnels, TunnelState{Name: name, Host: host})
 }
 
 // RemoveTunnel removes a tunnel from the active list
@@ -80,7 +100,7 @@ func (s *State) RemoveTunnel(name string) {
 	defer s.mu.Unlock()
 
 	for i, t := range s.ActiveTunnels {
-		if t == name {
+		if t.Name == name {
 			s.ActiveTunnels = append(s.ActiveTunnels[:i], s.ActiveTunnels[i+1:]...)
 			return
 		}
@@ -88,16 +108,18 @@ func (s *State) RemoveTunnel(name string) {
 }
 
 // AddGroup adds a group to the active list
-func (s *State) AddGroup(name string) {
+func (s *State) AddGroup(name, host string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, g := range s.ActiveGroups {
-		if g == name {
+	for i, g := range s.ActiveGroups {
+		if g.Name == name {
+			// Update host if group already exists
+			s.ActiveGroups[i].Host = host
 			return
 		}
 	}
-	s.ActiveGroups = append(s.ActiveGroups, name)
+	s.ActiveGroups = append(s.ActiveGroups, GroupState{Name: name, Host: host})
 }
 
 // RemoveGroup removes a group from the active list
@@ -106,29 +128,29 @@ func (s *State) RemoveGroup(name string) {
 	defer s.mu.Unlock()
 
 	for i, g := range s.ActiveGroups {
-		if g == name {
+		if g.Name == name {
 			s.ActiveGroups = append(s.ActiveGroups[:i], s.ActiveGroups[i+1:]...)
 			return
 		}
 	}
 }
 
-// GetActiveTunnels returns a copy of active tunnel names
-func (s *State) GetActiveTunnels() []string {
+// GetActiveTunnels returns a copy of active tunnel states
+func (s *State) GetActiveTunnels() []TunnelState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]string, len(s.ActiveTunnels))
+	result := make([]TunnelState, len(s.ActiveTunnels))
 	copy(result, s.ActiveTunnels)
 	return result
 }
 
-// GetActiveGroups returns a copy of active group names
-func (s *State) GetActiveGroups() []string {
+// GetActiveGroups returns a copy of active group states
+func (s *State) GetActiveGroups() []GroupState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]string, len(s.ActiveGroups))
+	result := make([]GroupState, len(s.ActiveGroups))
 	copy(result, s.ActiveGroups)
 	return result
 }
@@ -138,8 +160,8 @@ func (s *State) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.ActiveTunnels = []string{}
-	s.ActiveGroups = []string{}
+	s.ActiveTunnels = []TunnelState{}
+	s.ActiveGroups = []GroupState{}
 }
 
 // Delete removes the state file

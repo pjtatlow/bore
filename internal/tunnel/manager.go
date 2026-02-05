@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pjtatlow/bore/internal/config"
 	"github.com/pjtatlow/bore/internal/ssh"
@@ -11,40 +12,55 @@ import (
 
 // Manager manages tunnel lifecycle and SSH connections
 type Manager struct {
-	mu         sync.RWMutex
-	cfg        *config.Config
-	tunnels    map[string]Tunnel
-	sshClients map[string]*ssh.Client
-	sshReader  *config.SSHConfigReader
+	mu          sync.RWMutex
+	tunnels     map[string]Tunnel
+	tunnelHosts map[string]string // tracks which host each tunnel is connected through
+	sshClients  map[string]*ssh.Client
+	sshReader   *config.SSHConfigReader
 }
 
 // NewManager creates a new tunnel manager
-func NewManager(cfg *config.Config) (*Manager, error) {
+func NewManager() (*Manager, error) {
 	sshReader, err := config.NewSSHConfigReader()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read SSH config: %w", err)
 	}
 
 	return &Manager{
-		cfg:        cfg,
-		tunnels:    make(map[string]Tunnel),
-		sshClients: make(map[string]*ssh.Client),
-		sshReader:  sshReader,
+		tunnels:     make(map[string]Tunnel),
+		tunnelHosts: make(map[string]string),
+		sshClients:  make(map[string]*ssh.Client),
+		sshReader:   sshReader,
 	}, nil
 }
 
-// StartTunnel starts a tunnel by name
-func (m *Manager) StartTunnel(ctx context.Context, name string) error {
+// StartTunnel starts a tunnel by name using the specified host
+func (m *Manager) StartTunnel(ctx context.Context, name, host string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if already running
+	// If already running on same host, nothing to do
 	if _, exists := m.tunnels[name]; exists {
-		return fmt.Errorf("tunnel '%s' is already running", name)
+		if m.tunnelHosts[name] == host {
+			return nil
+		}
+		// Running on different host - stop it first to switch hosts
+		if tunnel, ok := m.tunnels[name]; ok {
+			tunnel.Stop()
+			delete(m.tunnels, name)
+			delete(m.tunnelHosts, name)
+			m.cleanupUnusedClients()
+		}
+	}
+
+	// Load config fresh
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Get tunnel config
-	tunnelCfg, ok := m.cfg.GetTunnel(name)
+	tunnelCfg, ok := cfg.GetTunnel(name)
 	if !ok {
 		return fmt.Errorf("tunnel '%s' not found in config", name)
 	}
@@ -55,9 +71,9 @@ func (m *Manager) StartTunnel(ctx context.Context, name string) error {
 	}
 
 	// Get or create SSH client for this host
-	client, err := m.getOrCreateSSHClient(ctx, tunnelCfg.Host)
+	client, err := m.getOrCreateSSHClient(ctx, host)
 	if err != nil {
-		return fmt.Errorf("failed to connect to host '%s': %w", tunnelCfg.Host, err)
+		return fmt.Errorf("failed to connect to host '%s': %w", host, err)
 	}
 
 	// Create tunnel based on type
@@ -77,6 +93,7 @@ func (m *Manager) StartTunnel(ctx context.Context, name string) error {
 	}
 
 	m.tunnels[name] = tunnel
+	m.tunnelHosts[name] = host
 	return nil
 }
 
@@ -95,6 +112,7 @@ func (m *Manager) StopTunnel(name string) error {
 	}
 
 	delete(m.tunnels, name)
+	delete(m.tunnelHosts, name)
 
 	// Clean up unused SSH clients
 	m.cleanupUnusedClients()
@@ -102,30 +120,34 @@ func (m *Manager) StopTunnel(name string) error {
 	return nil
 }
 
-// StartGroup starts all tunnels in a group
-func (m *Manager) StartGroup(ctx context.Context, groupName string) error {
-	tunnelNames, err := m.cfg.GetTunnelsForGroup(groupName)
+// StartGroup starts all tunnels in a group using the specified host
+func (m *Manager) StartGroup(ctx context.Context, groupName, host string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	tunnelNames, err := cfg.GetTunnelsForGroup(groupName)
 	if err != nil {
 		return err
 	}
 
 	// Check for port conflicts before starting any tunnels
-	if err := m.checkGroupPortConflicts(tunnelNames); err != nil {
+	if err := m.checkGroupPortConflicts(tunnelNames, cfg); err != nil {
 		return err
 	}
 
 	// Start all tunnels
+	var started []string
 	for _, name := range tunnelNames {
-		if err := m.StartTunnel(ctx, name); err != nil {
+		if err := m.StartTunnel(ctx, name, host); err != nil {
 			// Stop any tunnels we started on failure
-			for _, startedName := range tunnelNames {
-				if startedName == name {
-					break
-				}
+			for _, startedName := range started {
 				m.StopTunnel(startedName)
 			}
 			return fmt.Errorf("failed to start tunnel '%s': %w", name, err)
 		}
+		started = append(started, name)
 	}
 
 	return nil
@@ -133,7 +155,12 @@ func (m *Manager) StartGroup(ctx context.Context, groupName string) error {
 
 // StopGroup stops all tunnels in a group
 func (m *Manager) StopGroup(groupName string) error {
-	tunnelNames, err := m.cfg.GetTunnelsForGroup(groupName)
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	tunnelNames, err := cfg.GetTunnelsForGroup(groupName)
 	if err != nil {
 		return err
 	}
@@ -159,6 +186,14 @@ func (m *Manager) GetTunnelInfo(name string) (Info, bool) {
 	}
 
 	return tunnel.Info(), true
+}
+
+// GetTunnelHost returns the host a tunnel is connected through
+func (m *Manager) GetTunnelHost(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.tunnelHosts[name]
 }
 
 // GetAllTunnelInfo returns info about all running tunnels
@@ -198,6 +233,7 @@ func (m *Manager) StopAll() error {
 			lastErr = err
 		}
 		delete(m.tunnels, name)
+		delete(m.tunnelHosts, name)
 	}
 
 	// Close all SSH clients
@@ -220,18 +256,48 @@ func (m *Manager) getOrCreateSSHClient(ctx context.Context, hostName string) (*s
 		delete(m.sshClients, hostName)
 	}
 
+	// Load config fresh
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
 	// Resolve host config
-	boreHost, _ := m.cfg.GetHost(hostName)
+	boreHost, _ := cfg.GetHost(hostName)
 	resolvedHost := config.ResolveHost(hostName, boreHost, m.sshReader)
 
 	// Create new client
-	client := ssh.NewClient(resolvedHost, m.cfg)
+	client := ssh.NewClient(resolvedHost, cfg)
 	if err := client.Connect(ctx); err != nil {
 		return nil, err
 	}
 
+	// Set up disconnect callback to update tunnel statuses
+	client.SetOnDisconnect(func(err error) {
+		m.onSSHDisconnect(hostName, err)
+	})
+
 	m.sshClients[hostName] = client
 	return client, nil
+}
+
+// onSSHDisconnect handles SSH connection loss by updating all affected tunnels
+func (m *Manager) onSSHDisconnect(hostName string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Mark all tunnels using this host as errored
+	for name, tunnel := range m.tunnels {
+		if m.tunnelHosts[name] == hostName {
+			tunnel.SetStatus(StatusError, fmt.Errorf("SSH connection lost: %w", err))
+		}
+	}
+
+	// Remove the disconnected client from cache
+	if client, exists := m.sshClients[hostName]; exists {
+		client.Close()
+		delete(m.sshClients, hostName)
+	}
 }
 
 // checkPortConflict checks if a tunnel's local port conflicts with running tunnels
@@ -246,7 +312,7 @@ func (m *Manager) checkPortConflict(tunnelCfg config.Tunnel) error {
 }
 
 // checkGroupPortConflicts checks for port conflicts when enabling a group
-func (m *Manager) checkGroupPortConflicts(tunnelNames []string) error {
+func (m *Manager) checkGroupPortConflicts(tunnelNames []string, cfg *config.Config) error {
 	// Build map of ports from new tunnels
 	newPorts := make(map[int]string)
 	for _, name := range tunnelNames {
@@ -255,7 +321,7 @@ func (m *Manager) checkGroupPortConflicts(tunnelNames []string) error {
 			continue
 		}
 
-		tunnelCfg, ok := m.cfg.GetTunnel(name)
+		tunnelCfg, ok := cfg.GetTunnel(name)
 		if !ok {
 			return fmt.Errorf("tunnel '%s' not found", name)
 		}
@@ -283,8 +349,8 @@ func (m *Manager) checkGroupPortConflicts(tunnelNames []string) error {
 // cleanupUnusedClients removes SSH clients that have no active tunnels
 func (m *Manager) cleanupUnusedClients() {
 	usedHosts := make(map[string]bool)
-	for _, tunnel := range m.tunnels {
-		usedHosts[tunnel.Config().Host] = true
+	for _, host := range m.tunnelHosts {
+		usedHosts[host] = true
 	}
 
 	for hostName, client := range m.sshClients {
@@ -293,6 +359,32 @@ func (m *Manager) cleanupUnusedClients() {
 			delete(m.sshClients, hostName)
 		}
 	}
+}
+
+// CheckHealth performs a health check on all SSH connections concurrently and updates tunnel statuses
+func (m *Manager) CheckHealth() {
+	m.mu.RLock()
+	// Get list of hosts and clients to check
+	clients := make(map[string]*ssh.Client)
+	for host, client := range m.sshClients {
+		clients[host] = client
+	}
+	m.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+
+	// Check all hosts concurrently with a 5 second timeout
+	var wg sync.WaitGroup
+	for _, client := range clients {
+		wg.Add(1)
+		go func(c *ssh.Client) {
+			defer wg.Done()
+			c.CheckHealth(5 * time.Second)
+		}(client)
+	}
+	wg.Wait()
 }
 
 // ReconnectTunnel attempts to reconnect a disconnected tunnel
@@ -305,14 +397,19 @@ func (m *Manager) ReconnectTunnel(ctx context.Context, name string) error {
 		return fmt.Errorf("tunnel '%s' not found", name)
 	}
 
+	host, hasHost := m.tunnelHosts[name]
+	if !hasHost {
+		return fmt.Errorf("tunnel '%s' has no associated host", name)
+	}
+
 	tunnelCfg := tunnel.Config()
 
 	// Stop the old tunnel
 	tunnel.Stop()
 
 	// Get fresh SSH client (reconnect if needed)
-	delete(m.sshClients, tunnelCfg.Host)
-	client, err := m.getOrCreateSSHClient(ctx, tunnelCfg.Host)
+	delete(m.sshClients, host)
+	client, err := m.getOrCreateSSHClient(ctx, host)
 	if err != nil {
 		tunnel.SetStatus(StatusError, err)
 		return err

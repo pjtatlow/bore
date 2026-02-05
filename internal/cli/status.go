@@ -46,7 +46,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Println("Tunnels:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "  NAME\tTYPE\tSTATUS\tLOCAL\tREMOTE\tTRAFFIC\tCONNS\tRECONNECTS")
+		fmt.Fprintln(w, "  NAME\tTYPE\tHOST\tSTATUS\tLOCAL\tREMOTE\tTRAFFIC\tCONNS\tRECONNECTS")
 
 		for _, t := range status.Tunnels {
 			statusStr := formatStatus(t.Status)
@@ -54,8 +54,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			remote := fmt.Sprintf("%s:%d", t.RemoteHost, t.RemotePort)
 			traffic := formatBytes(t.BytesSent + t.BytesReceived)
 
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
-				t.Name, t.Type, statusStr, local, remote, traffic, t.Connections, t.ReconnectCount)
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
+				t.Name, t.Type, t.Host, statusStr, local, remote, traffic, t.Connections, t.ReconnectCount)
 		}
 		w.Flush()
 	}

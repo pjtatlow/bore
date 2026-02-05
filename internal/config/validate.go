@@ -64,6 +64,19 @@ func (c *Config) Validate() error {
 		errs = append(errs, c.validateTunnel(name, tunnel)...)
 	}
 
+	// Check for duplicate local ports across tunnels
+	portToTunnel := make(map[int]string)
+	for name, tunnel := range c.Tunnels {
+		if existingName, exists := portToTunnel[tunnel.LocalPort]; exists {
+			errs = append(errs, ValidationError{
+				Field:   fmt.Sprintf("tunnels.%s.local_port", name),
+				Message: fmt.Sprintf("port %d conflicts with tunnel '%s'", tunnel.LocalPort, existingName),
+			})
+		} else {
+			portToTunnel[tunnel.LocalPort] = name
+		}
+	}
+
 	// Validate groups
 	for name, group := range c.Groups {
 		errs = append(errs, c.validateGroup(name, group)...)
@@ -86,14 +99,7 @@ func (c *Config) validateTunnel(name string, t Tunnel) ValidationErrors {
 		})
 	}
 
-	if t.Host == "" {
-		errs = append(errs, ValidationError{
-			Field:   prefix + ".host",
-			Message: "is required",
-		})
-	} else if _, ok := c.Hosts[t.Host]; !ok {
-		// Host not in our config is OK - might be in ~/.ssh/config
-	}
+	// Host field in tunnel config is now optional - host is specified at runtime
 
 	if t.LocalPort <= 0 || t.LocalPort > 65535 {
 		errs = append(errs, ValidationError{

@@ -135,10 +135,10 @@ func (c *Client) Stop() error {
 }
 
 // TunnelUp starts a tunnel
-func (c *Client) TunnelUp(name string) error {
+func (c *Client) TunnelUp(name, host string) error {
 	resp, err := c.Send(Request{
 		Type: ReqTunnelUp,
-		Data: TunnelRequest{Name: name},
+		Data: TunnelRequest{Name: name, Host: host},
 	})
 	if err != nil {
 		return err
@@ -165,10 +165,10 @@ func (c *Client) TunnelDown(name string) error {
 }
 
 // GroupEnable enables a tunnel group
-func (c *Client) GroupEnable(name string) error {
+func (c *Client) GroupEnable(name, host string) error {
 	resp, err := c.Send(Request{
 		Type: ReqGroupEnable,
-		Data: GroupRequest{Name: name},
+		Data: GroupRequest{Name: name, Host: host},
 	})
 	if err != nil {
 		return err
@@ -190,18 +190,6 @@ func (c *Client) GroupDisable(name string) error {
 	}
 	if !resp.Success {
 		return fmt.Errorf("%s", resp.Error)
-	}
-	return nil
-}
-
-// ReloadConfig tells the daemon to reload its configuration
-func (c *Client) ReloadConfig() error {
-	resp, err := c.Send(Request{Type: ReqReloadConfig})
-	if err != nil {
-		return err
-	}
-	if !resp.Success {
-		return fmt.Errorf("reload failed: %s", resp.Error)
 	}
 	return nil
 }

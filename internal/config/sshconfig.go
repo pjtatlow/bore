@@ -1,9 +1,12 @@
 package config
 
 import (
+	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/kevinburke/ssh_config"
 )
@@ -21,7 +24,7 @@ func NewSSHConfigReader() (*SSHConfigReader, error) {
 	}
 
 	configPath := filepath.Join(home, ".ssh", "config")
-	f, err := os.Open(configPath)
+	content, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No SSH config is fine, return empty reader
@@ -29,14 +32,47 @@ func NewSSHConfigReader() (*SSHConfigReader, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
 
-	cfg, err := ssh_config.Decode(f)
+	// Filter out Match blocks which aren't supported by the ssh_config library
+	filtered := filterMatchBlocks(content)
+
+	cfg, err := ssh_config.Decode(bytes.NewReader(filtered))
 	if err != nil {
-		return nil, err
+		// If parsing still fails, return an empty config
+		return &SSHConfigReader{cfg: &ssh_config.Config{}}, nil
 	}
 
 	return &SSHConfigReader{cfg: cfg}, nil
+}
+
+// filterMatchBlocks removes Match directive blocks from SSH config content.
+// The ssh_config library doesn't support Match directives, so we strip them
+// out along with their associated settings (until the next Host or Match line).
+func filterMatchBlocks(content []byte) []byte {
+	var result bytes.Buffer
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	inMatchBlock := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		lowerTrimmed := strings.ToLower(trimmed)
+
+		// Check if this is a Host or Match directive
+		if strings.HasPrefix(lowerTrimmed, "host ") || strings.HasPrefix(lowerTrimmed, "host\t") {
+			inMatchBlock = false
+		} else if strings.HasPrefix(lowerTrimmed, "match ") || strings.HasPrefix(lowerTrimmed, "match\t") {
+			inMatchBlock = true
+			continue // Skip the Match line itself
+		}
+
+		if !inMatchBlock {
+			result.WriteString(line)
+			result.WriteString("\n")
+		}
+	}
+
+	return result.Bytes()
 }
 
 // GetHostname returns the actual hostname for an alias

@@ -83,7 +83,7 @@ func TestValidate(t *testing.T) {
 			errMsg:  "type",
 		},
 		{
-			name: "tunnel without host",
+			name: "tunnel without host is valid (host specified at runtime)",
 			config: &Config{
 				Defaults: Defaults{
 					Reconnect: ReconnectConfig{
@@ -100,8 +100,7 @@ func TestValidate(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
-			errMsg:  "host",
+			wantErr: false,
 		},
 		{
 			name: "tunnel with invalid port",
