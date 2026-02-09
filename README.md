@@ -16,7 +16,7 @@ A self-managed SSH tunnel daemon in Go with automatic reconnection, group-based 
 ## Installation
 
 ```bash
-go install github.com/pjtatlow/bore/cmd/bore@latest
+go install github.com/pjtatlow/bore@latest
 ```
 
 Or build from source:
@@ -24,7 +24,7 @@ Or build from source:
 ```bash
 git clone https://github.com/pjtatlow/bore.git
 cd bore
-go build -o bore ./cmd/bore
+go build -o bore .
 ```
 
 ## Quick Start
@@ -40,14 +40,12 @@ hosts:
 tunnels:
   web-app:
     type: local
-    host: bastion
     local_port: 8080
     remote_host: localhost
     remote_port: 80
 
   dev-server:
     type: remote
-    host: bastion
     local_port: 3000
     remote_port: 9000
 
@@ -63,10 +61,10 @@ groups:
 bore start
 ```
 
-3. Enable a tunnel group:
+3. Enable a tunnel group (specify which host to connect through):
 
 ```bash
-bore group enable development
+bore group enable development --host bastion
 ```
 
 4. Check status:
@@ -82,9 +80,9 @@ bore status
 | `bore start` | Start the daemon in the background |
 | `bore stop` | Stop the daemon and all tunnels |
 | `bore status` | Show daemon and tunnel status with statistics |
-| `bore group enable <name>` | Start all tunnels in a group |
+| `bore group enable <name> --host <host>` | Start all tunnels in a group via host |
 | `bore group disable <name>` | Stop all tunnels in a group |
-| `bore tunnel up <name>` | Start an individual tunnel |
+| `bore tunnel up <name> --host <host>` | Start an individual tunnel via host |
 | `bore tunnel down <name>` | Stop an individual tunnel |
 | `bore config validate` | Validate configuration syntax |
 | `bore config edit` | Open config in $EDITOR |
@@ -125,14 +123,12 @@ tunnels:
   # Local forwarding: listen locally, forward to remote
   web-app:
     type: local
-    host: bastion
     local_port: 8080
     remote_host: internal-web.local
     remote_port: 80
 
   database:
     type: local
-    host: bastion
     local_port: 5432
     remote_host: db.internal
     remote_port: 5432
@@ -140,7 +136,6 @@ tunnels:
   # Remote forwarding: listen on remote, forward to local
   dev-server:
     type: remote
-    host: bastion
     local_port: 3000
     remote_port: 9000
 
@@ -165,6 +160,10 @@ Hosts can be configured in bore's config or inherited from `~/.ssh/config`. Bore
 | `port` | SSH port (default: 22) |
 | `identity_file` | Path to private key |
 | `proxy_jump` | Jump host for ProxyJump |
+
+### Tunnel Configuration
+
+Tunnels are host-agnostic — they define the port forwarding but not which SSH host to connect through. The host is specified at runtime with the `--host` flag when starting tunnels or enabling groups. This lets you reuse the same tunnel definitions with different hosts.
 
 ### Tunnel Types
 
@@ -237,10 +236,10 @@ bore completion powershell > bore.ps1
 go test ./...
 
 # Build
-go build -o bore ./cmd/bore
+go build -o bore .
 
 # Run directly
-go run ./cmd/bore start
+go run . start
 ```
 
 ## License

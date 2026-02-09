@@ -9,7 +9,7 @@ Bore is a self-managed SSH tunnel daemon written in Go. It manages SSH tunnels w
 ### Package Structure
 
 ```
-cmd/bore/main.go          - Entry point, calls cli.Execute()
+main.go                    - Entry point, calls cli.Execute()
 internal/
   cli/                    - Cobra CLI commands
   daemon/                 - Background daemon process
@@ -31,7 +31,9 @@ internal/
 
 4. **Network Monitoring**: Uses `netstatus` library on macOS/Windows for native network change notifications. Falls back to DNS polling on Linux.
 
-5. **Tunnel Types**:
+5. **Host-Agnostic Tunnels**: Tunnel configs don't specify a host. The host is provided at runtime via `--host` flag on `tunnel up` and `group enable`, allowing the same tunnel definition to be used with different hosts.
+
+6. **Tunnel Types**:
    - Local (`-L`): `net.Listen()` locally, `sshClient.Dial()` to remote
    - Remote (`-R`): `sshClient.Listen()` remotely, `net.Dial()` to local
 
@@ -80,10 +82,10 @@ go test ./internal/config/...
 
 ```bash
 # Build binary
-go build -o bore ./cmd/bore
+go build -o bore .
 
 # Install to GOPATH/bin
-go install ./cmd/bore
+go install .
 ```
 
 ## Debugging
